@@ -1,0 +1,220 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "extrude_create",
+      "description": "Extrude a sketch profile into a 3D body.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sketchId": {
+            "type": "string",
+            "description": "ID of the sketch containing the profile"
+          },
+          "profileId": {
+            "type": "string",
+            "description": "ID of the profile to extrude"
+          },
+          "distance": {
+            "type": "number",
+            "description": "Extrusion distance in mm (positive = forward, negative = backward)"
+          }
+        },
+        "required": [
+          "sketchId",
+          "profileId",
+          "distance"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "hole_create",
+      "description": "Create a cylindrical hole in a body.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "description": "ID of the body to create hole in"
+          },
+          "x": {
+            "type": "number",
+            "description": "X position in mm"
+          },
+          "y": {
+            "type": "number",
+            "description": "Y position in mm"
+          },
+          "z": {
+            "type": "number",
+            "description": "Z position in mm"
+          },
+          "radius": {
+            "type": "number",
+            "description": "Hole radius in mm"
+          },
+          "depth": {
+            "type": "number",
+            "description": "Hole depth in mm"
+          }
+        },
+        "required": [
+          "bodyId",
+          "x",
+          "y",
+          "z",
+          "radius",
+          "depth"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "sketch_start",
+      "description": "Start a new sketch on a specified plane.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plane": {
+            "type": "string",
+            "description": "\"XY\", \"XZ\", or \"YZ\""
+          }
+        },
+        "required": [
+          "plane"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "sketch_add_line",
+      "description": "Add a line to the current sketch.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x1": {
+            "type": "number",
+            "description": "Start X coordinate in mm"
+          },
+          "y1": {
+            "type": "number",
+            "description": "Start Y coordinate in mm"
+          },
+          "x2": {
+            "type": "number",
+            "description": "End X coordinate in mm"
+          },
+          "y2": {
+            "type": "number",
+            "description": "End Y coordinate in mm"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "sketch_add_rectangle",
+      "description": "Add a rectangle to the current sketch.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "number",
+            "description": "Origin X in mm"
+          },
+          "y": {
+            "type": "number",
+            "description": "Origin Y in mm"
+          },
+          "width": {
+            "type": "number",
+            "description": "Width in mm"
+          },
+          "height": {
+            "type": "number",
+            "description": "Height in mm"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "sketch_add_circle",
+      "description": "Add a circle to the current sketch.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "cx": {
+            "type": "number",
+            "description": "Center X in mm"
+          },
+          "cy": {
+            "type": "number",
+            "description": "Center Y in mm"
+          },
+          "radius": {
+            "type": "number",
+            "description": "Radius in mm"
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "sketch_finish",
+      "description": "Finish and close the current sketch. Detects closed profiles automatically.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "stl-export_export",
+      "description": "Export a body as an STL file (triggers download).",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "description": "ID of the body to export"
+          }
+        },
+        "required": [
+          "bodyId"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "stl-import_import",
+      "description": "Import an STL file (opens file picker dialog).",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  }
+]
