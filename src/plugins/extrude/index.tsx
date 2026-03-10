@@ -21,13 +21,13 @@ function ExtrudeToolbarWrapper() {
   const mode = useEditorStore((s) => s.mode);
   const selectedSketchId = useEditorStore((s) => s.selectedSketchId);
 
-  if (mode !== "extrude" || !selectedSketchId) return null;
+  if (mode !== "extrude") return null;
 
   return (
     <ExtrudeDialog
-      sketchId={selectedSketchId}
-      onExtrude={(profileId, distance) => {
-        logic.extrude(selectedSketchId, profileId, distance);
+      sketchId={selectedSketchId || undefined}
+      onExtrude={(sketchId, profileId, distance) => {
+        logic.extrude(sketchId, profileId, distance);
         useEditorStore.getState().setMode("idle");
         useEditorStore.getState().setActivePlugin(null);
       }}

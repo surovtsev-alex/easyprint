@@ -120,6 +120,32 @@ export class ExtrudePluginLogic {
         return shape;
       }
 
+      if (prim.type === "ellipse") {
+        const { center, radiusX, radiusY } = prim;
+        shape.absellipse(center[0], center[1], radiusX, radiusY, 0, Math.PI * 2, false, 0);
+        return shape;
+      }
+
+      if (prim.type === "polyline") {
+        if (prim.points.length < 2) continue;
+        shape.moveTo(prim.points[0][0], prim.points[0][1]);
+        for (let i = 1; i < prim.points.length; i++) {
+          shape.lineTo(prim.points[i][0], prim.points[i][1]);
+        }
+        if (prim.closed) shape.closePath();
+        return shape;
+      }
+
+      if (prim.type === "arc") {
+        const { center, radius, startAngle, endAngle } = prim;
+        if (idx === edgeIndices[0]) {
+          const sx = center[0] + Math.cos(startAngle) * radius;
+          const sy = center[1] + Math.sin(startAngle) * radius;
+          shape.moveTo(sx, sy);
+        }
+        shape.absarc(center[0], center[1], radius, startAngle, endAngle, false);
+      }
+
       if (prim.type === "line") {
         if (idx === edgeIndices[0]) {
           shape.moveTo(prim.start[0], prim.start[1]);
@@ -128,7 +154,7 @@ export class ExtrudePluginLogic {
       }
     }
 
-    // Close for line loops
+    // Close for line/arc loops
     if (edgeIndices.length > 0) {
       shape.closePath();
     }
