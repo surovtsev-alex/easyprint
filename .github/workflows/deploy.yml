@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: "pages-prod"
+  group: "pages-deploy"
   cancel-in-progress: false
 
 jobs:
@@ -33,47 +33,10 @@ jobs:
           REPO_NAME: ${{ github.event.repository.name }}
         run: npm run build
 
-      - name: Checkout gh-pages branch
-        uses: actions/checkout@v4
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          ref: gh-pages
-          path: gh-pages-branch
-        continue-on-error: true
-
-      - name: Prepare gh-pages branch
-        run: |
-          if [ ! -d "gh-pages-branch/.git" ]; then
-            mkdir -p gh-pages-branch
-            cd gh-pages-branch
-            git init
-            git checkout -b gh-pages
-          fi
-
-      - name: Copy prod build to root (preserve /dev)
-        run: |
-          # Save dev folder if it exists
-          if [ -d "gh-pages-branch/dev" ]; then
-            cp -r gh-pages-branch/dev /tmp/dev-backup
-          fi
-
-          # Clean root (except .git and dev)
-          find gh-pages-branch -maxdepth 1 ! -name '.git' ! -name 'dev' ! -name '.' ! -name '..' -exec rm -rf {} +
-
-          # Copy prod build
-          cp -r out/* gh-pages-branch/
-          touch gh-pages-branch/.nojekyll
-
-          # Restore dev folder
-          if [ -d "/tmp/dev-backup" ]; then
-            cp -r /tmp/dev-backup gh-pages-branch/dev
-          fi
-
-      - name: Deploy to gh-pages branch
-        run: |
-          cd gh-pages-branch
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && echo "No changes to deploy" && exit 0
-          git commit -m "Deploy prod: ${{ github.sha }}"
-          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages --force
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./out
+          keep_files: true
+          exclude_assets: ""

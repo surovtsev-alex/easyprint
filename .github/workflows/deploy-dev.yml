@@ -12,8 +12,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: "pages-dev"
-  cancel-in-progress: true
+  group: "pages-deploy"
+  cancel-in-progress: false
 
 jobs:
   build-and-deploy:
@@ -37,35 +37,17 @@ jobs:
           NEXT_PUBLIC_ENV: development
         run: npm run build
 
-      - name: Checkout gh-pages branch
-        uses: actions/checkout@v4
-        with:
-          ref: gh-pages
-          path: gh-pages-branch
-        continue-on-error: true
-
-      - name: Prepare gh-pages branch
+      - name: Prepare deploy directory
         run: |
-          if [ ! -d "gh-pages-branch/.git" ]; then
-            mkdir -p gh-pages-branch
-            cd gh-pages-branch
-            git init
-            git checkout -b gh-pages
-            touch .nojekyll
-          fi
+          mkdir -p deploy/dev
+          cp -r out/* deploy/dev/
+          touch deploy/.nojekyll
 
-      - name: Copy dev build to /dev subfolder
-        run: |
-          rm -rf gh-pages-branch/dev
-          cp -r out gh-pages-branch/dev
-          touch gh-pages-branch/.nojekyll
-
-          # Create landing page if no prod build exists yet
-          if [ ! -f "gh-pages-branch/index.html" ] || grep -q "EasyPrint Environments" gh-pages-branch/index.html 2>/dev/null; then
-            cat > gh-pages-branch/index.html << 'HTMLEOF'
+          # Create landing page
+          cat > deploy/index.html << 'HTMLEOF'
           <!DOCTYPE html>
           <html>
-          <head><meta charset="utf-8"><title>EasyPrint</title>
+          <head><meta charset="utf-8"><title>EasyPrint 3D</title>
           <style>
             body { font-family: system-ui; background: #0a0a1a; color: #eee; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
             .container { text-align: center; }
@@ -73,29 +55,21 @@ jobs:
             a:hover { background: #1e3a5f; border-color: #60a5fa; }
             h1 { margin-bottom: 8px; }
             p { color: #888; margin-bottom: 24px; }
-            .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
-            .dev { background: #854d0e; color: #fef08a; }
-            .prod { background: #166534; color: #bbf7d0; }
           </style>
           </head>
           <body>
-            <!-- EasyPrint Environments -->
             <div class="container">
               <h1>EasyPrint 3D</h1>
               <p>Web-based 3D modeling application</p>
-              <a href="./dev/">Dev Version <span class="badge dev">DEV</span></a>
+              <a href="./dev/">Dev Version</a>
             </div>
           </body>
           </html>
           HTMLEOF
-          fi
 
-      - name: Deploy to gh-pages branch
-        run: |
-          cd gh-pages-branch
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && echo "No changes to deploy" && exit 0
-          git commit -m "Deploy dev: ${{ github.sha }}"
-          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages --force
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./deploy
+          keep_files: true
