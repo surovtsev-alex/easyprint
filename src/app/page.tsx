@@ -8,6 +8,7 @@ import { extrudePlugin } from "@/plugins/extrude";
 import { holePlugin } from "@/plugins/hole";
 import { stlExportPlugin } from "@/plugins/stl-export";
 import { stlImportPlugin } from "@/plugins/stl-import";
+import { useEditorStore } from "@/core/store/editorStore";
 
 export default function Home() {
   useEffect(() => {
@@ -17,6 +18,9 @@ export default function Home() {
     pluginRegistry.register(holePlugin);
     pluginRegistry.register(stlExportPlugin);
     pluginRegistry.register(stlImportPlugin);
+
+    // Notify UI that plugins are ready
+    useEditorStore.getState().bumpPluginsVersion();
 
     return () => {
       pluginRegistry.deactivateAll();

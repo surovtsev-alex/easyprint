@@ -68,6 +68,8 @@ function ToolGroup({
 }
 
 export function Toolbar() {
+  // Subscribe to pluginsVersion so we re-render after plugins are registered
+  useEditorStore((s) => s.pluginsVersion);
   const allPlugins = pluginRegistry.getAllPlugins();
   const viewportMode = useEditorStore((s) => s.viewportMode);
   const setViewportMode = useEditorStore((s) => s.setViewportMode);

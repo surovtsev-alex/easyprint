@@ -11,6 +11,7 @@ interface EditorState {
   viewportMode: ViewportMode;
   sketchPlane: "XY" | "XZ" | "YZ" | null;
   showPlaneSelector: boolean;
+  pluginsVersion: number;
 
   setMode: (mode: EditorMode) => void;
   setActivePlugin: (pluginId: string | null) => void;
@@ -19,6 +20,7 @@ interface EditorState {
   setViewportMode: (mode: ViewportMode) => void;
   setSketchPlane: (plane: "XY" | "XZ" | "YZ" | null) => void;
   setShowPlaneSelector: (show: boolean) => void;
+  bumpPluginsVersion: () => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -29,6 +31,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   viewportMode: "single",
   sketchPlane: null,
   showPlaneSelector: false,
+  pluginsVersion: 0,
 
   setMode: (mode) => set({ mode }),
   setActivePlugin: (pluginId) => set({ activePluginId: pluginId }),
@@ -37,4 +40,5 @@ export const useEditorStore = create<EditorState>((set) => ({
   setViewportMode: (mode) => set({ viewportMode: mode }),
   setSketchPlane: (plane) => set({ sketchPlane: plane }),
   setShowPlaneSelector: (show) => set({ showPlaneSelector: show }),
+  bumpPluginsVersion: () => set((s) => ({ pluginsVersion: s.pluginsVersion + 1 })),
 }));

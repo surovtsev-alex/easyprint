@@ -7,6 +7,7 @@ import { Timeline } from "./Timeline";
 import { SettingsDialog } from "./SettingsDialog";
 import { ViewportManager } from "@/core/engine/ViewportManager";
 import { ChatPanel } from "@/ai/ChatPanel";
+import { ActivePluginToolbar } from "./ActivePluginToolbar";
 
 export function Layout() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -25,6 +26,7 @@ export function Layout() {
         {/* Canvas Area */}
         <div className="flex-1 relative">
           <ViewportManager />
+          <ActivePluginToolbar />
 
           {/* Quick Action Buttons */}
           <div className="absolute bottom-2 right-2 z-10 flex gap-1">
