@@ -168,28 +168,60 @@ export class ExtrudePluginLogic {
     offset: number,
     distance: number
   ): void {
-    const dir = distance < 0 ? -1 : 1;
+    // ExtrudeGeometry creates shape in XY plane, extrudes along +Z from z=0 to z=depth.
+    // Sketch coords (sx, sy) are the shape's (x, y). We must rotate+translate
+    // so geometry matches sketch's sketchPointToWorld mapping:
+    //   XY: (sx, sy, offset), extrude along Z
+    //   XZ: (sx, offset, sy), extrude along Y
+    //   YZ: (offset, sx, sy), extrude along X
+    const depth = Math.abs(distance);
 
     if (plane === "XY") {
-      // ExtrudeGeometry extrudes along Z by default, which is what we want for XY
-      if (distance < 0) {
-        geometry.translate(0, 0, distance);
+      // No rotation needed. Shape (sx, sy) already at world (sx, sy).
+      // Extrusion along +Z: z goes 0..depth.
+      // For d>0: want Z from offset to offset+depth
+      // For d<0: want Z from offset-depth to offset
+      if (distance >= 0) {
+        geometry.translate(0, 0, offset);
+      } else {
+        geometry.translate(0, 0, offset + distance);
       }
-      geometry.translate(0, 0, offset);
     } else if (plane === "XZ") {
-      // Need to rotate from XY+Z extrusion to XZ+Y extrusion
-      geometry.rotateX(-Math.PI / 2);
-      if (distance < 0) {
-        geometry.translate(0, distance, 0);
+      // Need (sx, sy, z) → (sx, z_mapped, sy)
+      // rotateX(+π/2): (x, y, z) → (x, -z, y)
+      // Shape base (sx, sy, 0) → (sx, 0, sy) ✓
+      // Extrusion tip (sx, sy, depth) → (sx, -depth, sy)
+      // So extrusion extends in -Y direction (Y from -depth to 0)
+      geometry.rotateX(Math.PI / 2);
+      // For d>0: want Y from offset to offset+depth → shift by offset+depth
+      // For d<0: want Y from offset-depth to offset → shift by offset
+      if (distance >= 0) {
+        geometry.translate(0, offset + distance, 0);
+      } else {
+        geometry.translate(0, offset, 0);
       }
-      geometry.translate(0, offset, 0);
     } else {
-      // YZ plane
-      geometry.rotateY(Math.PI / 2);
-      if (distance < 0) {
-        geometry.translate(distance, 0, 0);
+      // YZ plane: need (sx, sy, z) → (z_mapped, sx, sy)
+      // This is a cyclic permutation: x→y, y→z, z→x
+      // No single axis rotation achieves this, so use a direct matrix.
+      const m = new THREE.Matrix4();
+      m.set(
+        0, 0, 1, 0,  // x_out = z_in
+        1, 0, 0, 0,  // y_out = x_in
+        0, 1, 0, 0,  // z_out = y_in
+        0, 0, 0, 1
+      );
+      geometry.applyMatrix4(m);
+      // Shape base (sx, sy, 0) → (0, sx, sy) ✓
+      // Extrusion tip (sx, sy, depth) → (depth, sx, sy)
+      // So extrusion extends in +X direction (X from 0 to depth)
+      // For d>0: want X from offset to offset+depth → shift by offset
+      // For d<0: want X from offset-depth to offset → shift by offset+distance
+      if (distance >= 0) {
+        geometry.translate(offset, 0, 0);
+      } else {
+        geometry.translate(offset + distance, 0, 0);
       }
-      geometry.translate(offset, 0, 0);
     }
   }
 
