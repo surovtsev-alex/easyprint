@@ -3,6 +3,7 @@ import type { CanvasAPI } from "@/core/api/CanvasAPI";
 import type { EventBus } from "@/core/api/EventBus";
 import { SketchPluginLogic } from "./SketchPlugin";
 import { SketchToolbar } from "./SketchToolbar";
+import { SketchPropertiesPanel, setLogicRef } from "./SketchPropertiesPanel";
 
 function SketchIcon() {
   return (
@@ -16,6 +17,20 @@ function SketchIcon() {
 }
 
 const logic = new SketchPluginLogic();
+
+// Wire up logic ref for properties panel
+setLogicRef(logic);
+
+function SketchToolbarWithPanel() {
+  return (
+    <>
+      <SketchToolbar />
+      <SketchPropertiesPanel />
+    </>
+  );
+}
+
+export { logic as sketchLogic };
 
 export const sketchPlugin: Plugin = {
   id: "sketch",
@@ -32,7 +47,7 @@ export const sketchPlugin: Plugin = {
     logic.deactivate();
   },
 
-  toolbar: SketchToolbar,
+  toolbar: SketchToolbarWithPanel,
 
   aiTools: logic.getAITools(),
 };

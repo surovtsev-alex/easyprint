@@ -115,6 +115,7 @@ export interface EditorEvents {
   "sketch:start": { plane: "XY" | "XZ" | "YZ" };
   "sketch:complete": { sketchId: string };
   "sketch:cancel": void;
+  "sketch:edit": { sketchId: string };
   "extrude:request": { sketchId: string; profileId: string };
   "extrude:complete": { bodyId: string };
   "hole:request": { bodyId: string; position: [number, number, number]; radius: number; depth: number };

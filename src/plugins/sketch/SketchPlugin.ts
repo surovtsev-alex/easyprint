@@ -6,21 +6,45 @@ import { useEditorStore } from "@/core/store/editorStore";
 import { useProjectStore } from "@/core/store/projectStore";
 import { useHistoryStore } from "@/core/store/historyStore";
 import { detectProfiles, snapPoint, snapToHorizontal, snapToVertical } from "./constraints";
-import { getSketchTool } from "./SketchToolbar";
+import { getSketchTool, setSketchTool } from "./SketchToolbar";
 import { v4 as uuidv4 } from "uuid";
+
+// Shared selection state
+let selectedPrimitiveIndex: number | null = null;
+const selectionListeners: Set<() => void> = new Set();
+
+export function getSelectedPrimitive(): number | null {
+  return selectedPrimitiveIndex;
+}
+
+export function setSelectedPrimitive(idx: number | null): void {
+  selectedPrimitiveIndex = idx;
+  selectionListeners.forEach((fn) => fn());
+}
+
+export function onSelectionChange(fn: () => void): () => void {
+  selectionListeners.add(fn);
+  return () => { selectionListeners.delete(fn); };
+}
+
+const COLORS = {
+  preview: 0x00ff88,
+  primitive: 0x00aaff,
+  selected: 0xffaa00,
+  finished: 0x5588cc,
+};
 
 export class SketchPluginLogic {
   private api: CanvasAPI | null = null;
   private bus: EventBus | null = null;
   private currentSketch: Sketch | null = null;
   private sketchGroup: THREE.Group | null = null;
+  private primitiveLines: THREE.Line[] = []; // index matches primitives[]
   private drawingState: {
     isDrawing: boolean;
     startPoint: [number, number] | null;
     previewLine: THREE.Line | null;
-    // Arc: 3-point arc state
     arcPoints: [number, number][];
-    // Polyline state
     polylinePoints: [number, number][];
     polylineLines: THREE.Line[];
   } = {
@@ -38,32 +62,37 @@ export class SketchPluginLogic {
   private boundMouseMove: ((e: MouseEvent) => void) | null = null;
   private boundMouseUp: ((e: MouseEvent) => void) | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
+  private sketchFinished = false;
 
   activate(api: CanvasAPI, bus: EventBus): void {
     this.api = api;
     this.bus = bus;
 
-    // Show plane selector
+    // Show plane selector for new sketch
     useEditorStore.getState().setShowPlaneSelector(true);
 
-    // Listen for sketch:start
     this.unsubscribers.push(
       bus.on("sketch:start", ({ plane }) => {
         this.startSketch(plane);
       })
     );
 
-    // Listen for sketch:complete
     this.unsubscribers.push(
       bus.on("sketch:complete", ({ sketchId }) => {
         this.finishSketch(sketchId);
       })
     );
 
-    // Listen for sketch:cancel
     this.unsubscribers.push(
       bus.on("sketch:cancel", () => {
         this.cancelSketch();
+      })
+    );
+
+    // Edit existing sketch
+    this.unsubscribers.push(
+      bus.on("sketch:edit" as any, ({ sketchId }: { sketchId: string }) => {
+        this.editSketch(sketchId);
       })
     );
   }
@@ -72,11 +101,22 @@ export class SketchPluginLogic {
     this.removeCanvasListeners();
     this.unsubscribers.forEach((fn) => fn());
     this.unsubscribers = [];
-    if (this.sketchGroup && this.api) {
+
+    // If sketch was finished, persist visuals; otherwise remove
+    if (this.sketchFinished && this.sketchGroup && this.api && this.currentSketch) {
+      // Remove plane indicator, dim colors for finished state
+      this.removePlaneIndicator();
+      this.dimSketchColors();
+      this.api.storeSketchVisual(this.currentSketch.id, this.sketchGroup);
+    } else if (this.sketchGroup && this.api) {
       this.api.removeHelper(this.sketchGroup);
     }
+
+    setSelectedPrimitive(null);
+    this.primitiveLines = [];
     this.currentSketch = null;
     this.sketchGroup = null;
+    this.sketchFinished = false;
     useEditorStore.getState().setMode("idle");
     useEditorStore.getState().setSketchPlane(null);
     useEditorStore.getState().setSelectedSketch(null);
@@ -86,15 +126,49 @@ export class SketchPluginLogic {
     if (!this.api) return;
 
     this.currentSketch = this.api.createSketch(plane);
+    this.sketchFinished = false;
     useEditorStore.getState().setSelectedSketch(this.currentSketch.id);
     useProjectStore.getState().addSketch(this.currentSketch);
 
-    // Create a group for sketch visualization
+    this.createSketchGroup(plane);
+    this.api.setCameraToPlane(plane);
+    this.setupCanvasListeners();
+  }
+
+  editSketch(sketchId: string): void {
+    if (!this.api) return;
+
+    const sketch = this.api.getSketch(sketchId);
+    if (!sketch) return;
+
+    // Remove persisted visuals
+    this.api.removeSketchVisual(sketchId);
+
+    this.currentSketch = sketch;
+    this.sketchFinished = false;
+    useEditorStore.getState().setSelectedSketch(sketchId);
+    useEditorStore.getState().setMode("sketch");
+    useEditorStore.getState().setSketchPlane(sketch.plane);
+
+    this.createSketchGroup(sketch.plane);
+
+    // Re-render existing primitives
+    this.primitiveLines = [];
+    for (const prim of sketch.primitives) {
+      this.renderPrimitive(prim);
+    }
+
+    this.api.setCameraToPlane(sketch.plane);
+    this.setupCanvasListeners();
+  }
+
+  private createSketchGroup(plane: "XY" | "XZ" | "YZ"): void {
+    if (!this.api) return;
+
     this.sketchGroup = new THREE.Group();
-    this.sketchGroup.name = `sketch_${this.currentSketch.id}`;
+    this.sketchGroup.name = `sketch_${this.currentSketch?.id}`;
     this.api.addHelper(this.sketchGroup);
 
-    // Add sketch plane indicator
     const planeGeom = new THREE.PlaneGeometry(200, 200);
     const planeMat = new THREE.MeshBasicMaterial({
       color: 0x4488ff,
@@ -103,19 +177,31 @@ export class SketchPluginLogic {
       side: THREE.DoubleSide,
     });
     const planeMesh = new THREE.Mesh(planeGeom, planeMat);
+    planeMesh.name = "__plane_indicator__";
 
-    if (plane === "XZ") {
-      planeMesh.rotation.x = -Math.PI / 2;
-    } else if (plane === "YZ") {
-      planeMesh.rotation.y = Math.PI / 2;
-    }
+    if (plane === "XZ") planeMesh.rotation.x = -Math.PI / 2;
+    else if (plane === "YZ") planeMesh.rotation.y = Math.PI / 2;
     this.sketchGroup.add(planeMesh);
+  }
 
-    // Set camera to face the plane
-    this.api.setCameraToPlane(plane);
+  private removePlaneIndicator(): void {
+    if (!this.sketchGroup) return;
+    const indicator = this.sketchGroup.getObjectByName("__plane_indicator__");
+    if (indicator) {
+      this.sketchGroup.remove(indicator);
+      if (indicator instanceof THREE.Mesh) {
+        indicator.geometry.dispose();
+        (indicator.material as THREE.Material).dispose();
+      }
+    }
+  }
 
-    // Attach mouse listeners to canvas
-    this.setupCanvasListeners();
+  private dimSketchColors(): void {
+    this.primitiveLines.forEach((line) => {
+      if (line.material instanceof THREE.LineBasicMaterial) {
+        line.material.color.setHex(COLORS.finished);
+      }
+    });
   }
 
   private setupCanvasListeners(): void {
@@ -133,7 +219,6 @@ export class SketchPluginLogic {
     canvas.addEventListener("mouseup", this.boundMouseUp);
     canvas.addEventListener("dblclick", this.boundDblClick);
 
-    // Create dimension overlay
     this.dimensionDiv = document.createElement("div");
     Object.assign(this.dimensionDiv.style, {
       position: "fixed", pointerEvents: "none", zIndex: "100",
@@ -176,7 +261,6 @@ export class SketchPluginLogic {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
 
-    // Intersect with the sketch plane
     const plane = this.currentSketch.plane;
     const planeNormal =
       plane === "XY"
@@ -191,16 +275,175 @@ export class SketchPluginLogic {
 
     if (!intersection) return null;
 
-    // Convert 3D point to 2D sketch coordinates
     if (plane === "XY") return [intersection.x, intersection.y];
     if (plane === "XZ") return [intersection.x, intersection.z];
-    return [intersection.y, intersection.z]; // YZ
+    return [intersection.y, intersection.z];
   }
 
+  // ── Selection ──
+
+  private handleSelect(event: MouseEvent): void {
+    const point = this.getPlanePoint(event);
+    if (!point || !this.currentSketch) return;
+
+    const bestIdx = this.findNearestPrimitive(point, 5);
+
+    // Update highlight
+    const prevIdx = getSelectedPrimitive();
+    if (prevIdx !== null && prevIdx < this.primitiveLines.length) {
+      const prevLine = this.primitiveLines[prevIdx];
+      if (prevLine?.material instanceof THREE.LineBasicMaterial) {
+        prevLine.material.color.setHex(COLORS.primitive);
+      }
+    }
+
+    setSelectedPrimitive(bestIdx);
+
+    if (bestIdx !== null && bestIdx < this.primitiveLines.length) {
+      const line = this.primitiveLines[bestIdx];
+      if (line?.material instanceof THREE.LineBasicMaterial) {
+        line.material.color.setHex(COLORS.selected);
+      }
+    }
+  }
+
+  private findNearestPrimitive(point: [number, number], threshold: number): number | null {
+    if (!this.currentSketch) return null;
+    let best: number | null = null;
+    let bestDist = threshold;
+
+    this.currentSketch.primitives.forEach((prim, idx) => {
+      const d = this.distToPrimitive(point, prim);
+      if (d < bestDist) {
+        bestDist = d;
+        best = idx;
+      }
+    });
+    return best;
+  }
+
+  private distToPrimitive(point: [number, number], prim: SketchPrimitive): number {
+    const dist2D = (a: [number, number], b: [number, number]) =>
+      Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+
+    if (prim.type === "line") {
+      return this.distToSegment(point, prim.start, prim.end);
+    } else if (prim.type === "rectangle") {
+      const { origin, width, height } = prim;
+      const corners: [number, number][] = [
+        origin,
+        [origin[0] + width, origin[1]],
+        [origin[0] + width, origin[1] + height],
+        [origin[0], origin[1] + height],
+      ];
+      let min = Infinity;
+      for (let i = 0; i < 4; i++) {
+        min = Math.min(min, this.distToSegment(point, corners[i], corners[(i + 1) % 4]));
+      }
+      return min;
+    } else if (prim.type === "circle") {
+      return Math.abs(dist2D(point, prim.center) - prim.radius);
+    } else if (prim.type === "ellipse") {
+      // Approximate
+      const angle = Math.atan2(point[1] - prim.center[1], point[0] - prim.center[0]);
+      const ep: [number, number] = [
+        prim.center[0] + Math.cos(angle) * prim.radiusX,
+        prim.center[1] + Math.sin(angle) * prim.radiusY,
+      ];
+      return dist2D(point, ep);
+    } else if (prim.type === "arc") {
+      const d = dist2D(point, prim.center);
+      return Math.abs(d - prim.radius);
+    } else if (prim.type === "polyline") {
+      let min = Infinity;
+      for (let i = 0; i < prim.points.length - 1; i++) {
+        min = Math.min(min, this.distToSegment(point, prim.points[i], prim.points[i + 1]));
+      }
+      if (prim.closed && prim.points.length > 1) {
+        min = Math.min(min, this.distToSegment(point, prim.points[prim.points.length - 1], prim.points[0]));
+      }
+      return min;
+    }
+    return Infinity;
+  }
+
+  private distToSegment(p: [number, number], a: [number, number], b: [number, number]): number {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.sqrt((p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2);
+    let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const proj: [number, number] = [a[0] + t * dx, a[1] + t * dy];
+    return Math.sqrt((p[0] - proj[0]) ** 2 + (p[1] - proj[1]) ** 2);
+  }
+
+  // ── Update primitive (from properties panel) ──
+
+  updatePrimitive(index: number, newPrim: SketchPrimitive): void {
+    if (!this.currentSketch || !this.api) return;
+
+    this.currentSketch.primitives[index] = newPrim;
+    this.api.updatePrimitive(this.currentSketch.id, index, newPrim);
+    useProjectStore.getState().updateSketchPrimitive(this.currentSketch.id, index, newPrim);
+
+    // Re-render this specific primitive
+    if (index < this.primitiveLines.length && this.sketchGroup) {
+      const oldLine = this.primitiveLines[index];
+      this.sketchGroup.remove(oldLine);
+      oldLine.geometry.dispose();
+    }
+
+    const isSelected = getSelectedPrimitive() === index;
+    const line = this.buildPrimitiveLine(newPrim, isSelected ? COLORS.selected : COLORS.primitive);
+    if (line && this.sketchGroup) {
+      this.sketchGroup.add(line);
+      this.primitiveLines[index] = line;
+    }
+  }
+
+  deletePrimitive(index: number): void {
+    if (!this.currentSketch || !this.api) return;
+
+    // Remove visual
+    if (index < this.primitiveLines.length && this.sketchGroup) {
+      const oldLine = this.primitiveLines[index];
+      this.sketchGroup.remove(oldLine);
+      oldLine.geometry.dispose();
+      this.primitiveLines.splice(index, 1);
+    }
+
+    this.currentSketch.primitives.splice(index, 1);
+    this.api.removePrimitive(this.currentSketch.id, index);
+    useProjectStore.getState().removeSketchPrimitive(this.currentSketch.id, index);
+    setSelectedPrimitive(null);
+  }
+
+  getCurrentSketch(): Sketch | null {
+    return this.currentSketch;
+  }
+
+  // ── Mouse Handlers ──
+
   private handleMouseDown(event: MouseEvent): void {
-    if (event.button !== 0) return; // left click only
+    if (event.button !== 0) return;
     const tool = getSketchTool();
-    if (tool === "select") return;
+
+    if (tool === "select") {
+      this.handleSelect(event);
+      return;
+    }
+
+    // Deselect when drawing
+    if (getSelectedPrimitive() !== null) {
+      const prevIdx = getSelectedPrimitive()!;
+      if (prevIdx < this.primitiveLines.length) {
+        const prevLine = this.primitiveLines[prevIdx];
+        if (prevLine?.material instanceof THREE.LineBasicMaterial) {
+          prevLine.material.color.setHex(COLORS.primitive);
+        }
+      }
+      setSelectedPrimitive(null);
+    }
 
     const point = this.getPlanePoint(event);
     if (!point) return;
@@ -218,7 +461,6 @@ export class SketchPluginLogic {
     }
 
     if (tool === "polyline") {
-      // First click starts polyline, subsequent clicks add segments
       this.drawingState.polylinePoints.push(snapped);
       if (this.drawingState.polylinePoints.length > 1) {
         const pts = this.drawingState.polylinePoints;
@@ -226,7 +468,7 @@ export class SketchPluginLogic {
         const cur = pts[pts.length - 1];
         const worldPts = this.sketchToWorld(prev, cur);
         const geom = new THREE.BufferGeometry().setFromPoints(worldPts);
-        const mat = new THREE.LineBasicMaterial({ color: 0x00aaff, linewidth: 2 });
+        const mat = new THREE.LineBasicMaterial({ color: COLORS.primitive, linewidth: 2 });
         const seg = new THREE.Line(geom, mat);
         if (this.sketchGroup) this.sketchGroup.add(seg);
         this.drawingState.polylineLines.push(seg);
@@ -242,10 +484,12 @@ export class SketchPluginLogic {
 
   private handleMouseMove(event: MouseEvent): void {
     const tool = getSketchTool();
+    if (tool === "select") return;
+
     const point = this.getPlanePoint(event);
     if (!point || !this.sketchGroup) return;
 
-    // Arc preview (before first click we don't preview, after 1-2 clicks we show guide)
+    // Arc preview
     if (tool === "arc" && this.drawingState.arcPoints.length > 0) {
       if (this.drawingState.previewLine) {
         this.sketchGroup.remove(this.drawingState.previewLine);
@@ -254,14 +498,14 @@ export class SketchPluginLogic {
       const pts = [...this.drawingState.arcPoints, point];
       const worldPts = pts.map((p) => this.sketchPointToWorld(p));
       const geom = new THREE.BufferGeometry().setFromPoints(worldPts);
-      const mat = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+      const mat = new THREE.LineBasicMaterial({ color: COLORS.preview });
       this.drawingState.previewLine = new THREE.Line(geom, mat);
       this.sketchGroup.add(this.drawingState.previewLine);
       this.showDimension(event, `${this.drawingState.arcPoints.length}/3 pts`);
       return;
     }
 
-    // Polyline preview of current segment
+    // Polyline preview
     if (tool === "polyline" && this.drawingState.polylinePoints.length > 0) {
       if (this.drawingState.previewLine) {
         this.sketchGroup.remove(this.drawingState.previewLine);
@@ -270,7 +514,7 @@ export class SketchPluginLogic {
       const last = this.drawingState.polylinePoints[this.drawingState.polylinePoints.length - 1];
       const worldPts = this.sketchToWorld(last, point);
       const geom = new THREE.BufferGeometry().setFromPoints(worldPts);
-      const mat = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+      const mat = new THREE.LineBasicMaterial({ color: COLORS.preview });
       this.drawingState.previewLine = new THREE.Line(geom, mat);
       this.sketchGroup.add(this.drawingState.previewLine);
       const len = Math.sqrt((point[0] - last[0]) ** 2 + (point[1] - last[1]) ** 2);
@@ -283,7 +527,6 @@ export class SketchPluginLogic {
       return;
     }
 
-    // Remove previous preview
     if (this.drawingState.previewLine) {
       this.sketchGroup.remove(this.drawingState.previewLine);
       this.drawingState.previewLine.geometry.dispose();
@@ -296,7 +539,7 @@ export class SketchPluginLogic {
       this.showDimension(event, `${len.toFixed(1)} mm`);
       const points = this.sketchToWorld(start, point);
       const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+      const material = new THREE.LineBasicMaterial({ color: COLORS.preview });
       this.drawingState.previewLine = new THREE.Line(geometry, material);
       this.sketchGroup.add(this.drawingState.previewLine);
     } else if (tool === "rectangle") {
@@ -304,58 +547,27 @@ export class SketchPluginLogic {
       const h = Math.abs(point[1] - start[1]);
       this.showDimension(event, `${w.toFixed(1)} × ${h.toFixed(1)} mm`);
       const corners = [
-        start,
-        [point[0], start[1]] as [number, number],
-        point,
-        [start[0], point[1]] as [number, number],
-        start,
+        start, [point[0], start[1]] as [number, number],
+        point, [start[0], point[1]] as [number, number], start,
       ];
       const worldPoints = corners.map((c, i) =>
-        i < corners.length - 1
-          ? this.sketchPointToWorld(c)
-          : this.sketchPointToWorld(corners[0])
+        i < corners.length - 1 ? this.sketchPointToWorld(c) : this.sketchPointToWorld(corners[0])
       );
       const geometry = new THREE.BufferGeometry().setFromPoints(worldPoints);
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff88 });
+      const material = new THREE.LineBasicMaterial({ color: COLORS.preview });
       this.drawingState.previewLine = new THREE.Line(geometry, material);
       this.sketchGroup.add(this.drawingState.previewLine);
     } else if (tool === "circle") {
-      const radius = Math.sqrt(
-        (point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2
-      );
+      const radius = Math.sqrt((point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2);
       this.showDimension(event, `R ${radius.toFixed(1)} mm`);
-      const segments = 64;
-      const circlePoints: THREE.Vector3[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const angle = (i / segments) * Math.PI * 2;
-        const cp: [number, number] = [
-          start[0] + Math.cos(angle) * radius,
-          start[1] + Math.sin(angle) * radius,
-        ];
-        circlePoints.push(this.sketchPointToWorld(cp));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(circlePoints);
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff88 });
-      this.drawingState.previewLine = new THREE.Line(geometry, material);
-      this.sketchGroup.add(this.drawingState.previewLine);
+      this.drawingState.previewLine = this.buildCircleLine(start, radius, COLORS.preview);
+      if (this.drawingState.previewLine) this.sketchGroup.add(this.drawingState.previewLine);
     } else if (tool === "ellipse") {
       const rx = Math.abs(point[0] - start[0]);
       const ry = Math.abs(point[1] - start[1]);
       this.showDimension(event, `${(rx * 2).toFixed(1)} × ${(ry * 2).toFixed(1)} mm`);
-      const segments = 64;
-      const ellipsePoints: THREE.Vector3[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const angle = (i / segments) * Math.PI * 2;
-        const ep: [number, number] = [
-          start[0] + Math.cos(angle) * rx,
-          start[1] + Math.sin(angle) * ry,
-        ];
-        ellipsePoints.push(this.sketchPointToWorld(ep));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(ellipsePoints);
-      const material = new THREE.LineBasicMaterial({ color: 0x00ff88 });
-      this.drawingState.previewLine = new THREE.Line(geometry, material);
-      this.sketchGroup.add(this.drawingState.previewLine);
+      this.drawingState.previewLine = this.buildEllipseLine(start, rx, ry, COLORS.preview);
+      if (this.drawingState.previewLine) this.sketchGroup.add(this.drawingState.previewLine);
     }
   }
 
@@ -363,16 +575,13 @@ export class SketchPluginLogic {
     if (event.button !== 0) return;
     const tool = getSketchTool();
 
-    // Arc and polyline handle clicks differently
-    if (tool === "arc" || tool === "polyline") return;
-
+    if (tool === "arc" || tool === "polyline" || tool === "select") return;
     if (!this.drawingState.isDrawing) return;
 
     const point = this.getPlanePoint(event);
     if (!point || !this.currentSketch || !this.api) return;
 
     const start = this.drawingState.startPoint!;
-
     let primitive: SketchPrimitive | null = null;
 
     if (tool === "line") {
@@ -387,17 +596,12 @@ export class SketchPluginLogic {
         primitive = {
           type: "rectangle",
           origin: [Math.min(start[0], point[0]), Math.min(start[1], point[1])],
-          width: w,
-          height: h,
+          width: w, height: h,
         };
       }
     } else if (tool === "circle") {
-      const radius = Math.sqrt(
-        (point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2
-      );
-      if (radius > 0.1) {
-        primitive = { type: "circle", center: start, radius };
-      }
+      const radius = Math.sqrt((point[0] - start[0]) ** 2 + (point[1] - start[1]) ** 2);
+      if (radius > 0.1) primitive = { type: "circle", center: start, radius };
     } else if (tool === "ellipse") {
       const rx = Math.abs(point[0] - start[0]);
       const ry = Math.abs(point[1] - start[1]);
@@ -411,7 +615,6 @@ export class SketchPluginLogic {
       this.renderPrimitive(primitive);
     }
 
-    // Clean up preview
     if (this.drawingState.previewLine && this.sketchGroup) {
       this.sketchGroup.remove(this.drawingState.previewLine);
       this.drawingState.previewLine.geometry.dispose();
@@ -423,33 +626,102 @@ export class SketchPluginLogic {
     this.drawingState.startPoint = null;
   }
 
-  private handleDblClick(event: MouseEvent): void {
+  private handleDblClick(_event: MouseEvent): void {
     const tool = getSketchTool();
     if (tool === "polyline") {
       this.finalizePolyline(false);
     }
   }
 
+  // ── Primitive builders ──
+
+  private buildCircleLine(center: [number, number], radius: number, color: number): THREE.Line {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 64; i++) {
+      const angle = (i / 64) * Math.PI * 2;
+      pts.push(this.sketchPointToWorld([
+        center[0] + Math.cos(angle) * radius,
+        center[1] + Math.sin(angle) * radius,
+      ]));
+    }
+    return new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color })
+    );
+  }
+
+  private buildEllipseLine(center: [number, number], rx: number, ry: number, color: number): THREE.Line {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 64; i++) {
+      const angle = (i / 64) * Math.PI * 2;
+      pts.push(this.sketchPointToWorld([
+        center[0] + Math.cos(angle) * rx,
+        center[1] + Math.sin(angle) * ry,
+      ]));
+    }
+    return new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color })
+    );
+  }
+
+  private buildPrimitiveLine(prim: SketchPrimitive, color: number): THREE.Line | null {
+    const mat = new THREE.LineBasicMaterial({ color, linewidth: 2 });
+    if (prim.type === "line") {
+      const pts = this.sketchToWorld(prim.start, prim.end);
+      return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+    } else if (prim.type === "rectangle") {
+      const { origin, width, height } = prim;
+      const corners: [number, number][] = [
+        origin, [origin[0] + width, origin[1]],
+        [origin[0] + width, origin[1] + height],
+        [origin[0], origin[1] + height], origin,
+      ];
+      return new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(corners.map((c) => this.sketchPointToWorld(c))),
+        mat
+      );
+    } else if (prim.type === "circle") {
+      return this.buildCircleLine(prim.center, prim.radius, color);
+    } else if (prim.type === "ellipse") {
+      return this.buildEllipseLine(prim.center, prim.radiusX, prim.radiusY, color);
+    } else if (prim.type === "arc") {
+      const pts: THREE.Vector3[] = [];
+      let { startAngle, endAngle } = prim;
+      if (endAngle < startAngle) endAngle += Math.PI * 2;
+      for (let i = 0; i <= 64; i++) {
+        const angle = startAngle + (i / 64) * (endAngle - startAngle);
+        pts.push(this.sketchPointToWorld([
+          prim.center[0] + Math.cos(angle) * prim.radius,
+          prim.center[1] + Math.sin(angle) * prim.radius,
+        ]));
+      }
+      return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+    } else if (prim.type === "polyline") {
+      const pts = prim.points.map((p) => this.sketchPointToWorld(p));
+      if (prim.closed && pts.length > 0) pts.push(this.sketchPointToWorld(prim.points[0]));
+      return new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+    }
+    return null;
+  }
+
+  // ── Arc/Polyline finalization ──
+
   private finalizeArc(): void {
     if (!this.currentSketch || !this.api) return;
     const pts = this.drawingState.arcPoints;
     if (pts.length !== 3) return;
 
-    // Compute arc from 3 points
     const arc = this.computeArcFrom3Points(pts[0], pts[1], pts[2]);
     if (arc) {
       const primitive: SketchPrimitive = {
-        type: "arc",
-        center: arc.center,
-        radius: arc.radius,
-        startAngle: arc.startAngle,
-        endAngle: arc.endAngle,
+        type: "arc", center: arc.center, radius: arc.radius,
+        startAngle: arc.startAngle, endAngle: arc.endAngle,
       };
       this.api.addPrimitive(this.currentSketch.id, primitive);
       this.renderPrimitive(primitive);
     }
 
-    // Clean up
     if (this.drawingState.previewLine && this.sketchGroup) {
       this.sketchGroup.remove(this.drawingState.previewLine);
       this.drawingState.previewLine.geometry.dispose();
@@ -460,67 +732,40 @@ export class SketchPluginLogic {
   }
 
   private computeArcFrom3Points(
-    p1: [number, number],
-    p2: [number, number],
-    p3: [number, number]
+    p1: [number, number], p2: [number, number], p3: [number, number]
   ): { center: [number, number]; radius: number; startAngle: number; endAngle: number } | null {
-    // Find circumcenter of 3 points
-    const ax = p1[0], ay = p1[1];
-    const bx = p2[0], by = p2[1];
-    const cx = p3[0], cy = p3[1];
-
+    const ax = p1[0], ay = p1[1], bx = p2[0], by = p2[1], cx = p3[0], cy = p3[1];
     const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-    if (Math.abs(D) < 1e-10) return null; // Collinear
+    if (Math.abs(D) < 1e-10) return null;
 
     const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / D;
     const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / D;
-
     const center: [number, number] = [ux, uy];
     const radius = Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2);
 
-    let a1 = Math.atan2(ay - uy, ax - ux);
-    const a2 = Math.atan2(by - uy, bx - ux);
-    let a3 = Math.atan2(cy - uy, cx - ux);
+    const norm = (a: number) => (a < 0 ? a + Math.PI * 2 : a);
+    const a1 = norm(Math.atan2(ay - uy, ax - ux));
+    const aMid = norm(Math.atan2(by - uy, bx - ux));
+    const a3 = norm(Math.atan2(cy - uy, cx - ux));
 
-    // Ensure arc goes through p2 by choosing correct direction
-    const normalizeAngle = (a: number) => (a < 0 ? a + Math.PI * 2 : a);
-    a1 = normalizeAngle(a1);
-    a3 = normalizeAngle(a3);
-    const aMid = normalizeAngle(a2);
-
-    // Check if mid-point is within arc from a1 to a3 (CCW)
-    const inArcCCW = a1 < a3
-      ? (aMid >= a1 && aMid <= a3)
-      : (aMid >= a1 || aMid <= a3);
-
-    if (inArcCCW) {
-      return { center, radius, startAngle: a1, endAngle: a3 };
-    } else {
-      return { center, radius, startAngle: a3, endAngle: a1 };
-    }
+    const inArcCCW = a1 < a3 ? (aMid >= a1 && aMid <= a3) : (aMid >= a1 || aMid <= a3);
+    return inArcCCW
+      ? { center, radius, startAngle: a1, endAngle: a3 }
+      : { center, radius, startAngle: a3, endAngle: a1 };
   }
 
   private finalizePolyline(closed: boolean): void {
     if (!this.currentSketch || !this.api) return;
     const pts = this.drawingState.polylinePoints;
-    if (pts.length < 2) {
-      this.clearPolylineState();
-      return;
-    }
+    if (pts.length < 2) { this.clearPolylineState(); return; }
 
-    const primitive: SketchPrimitive = {
-      type: "polyline",
-      points: [...pts],
-      closed,
-    };
+    const primitive: SketchPrimitive = { type: "polyline", points: [...pts], closed };
     this.api.addPrimitive(this.currentSketch.id, primitive);
 
-    // Remove intermediate line segments (they were visual guides)
     for (const seg of this.drawingState.polylineLines) {
       if (this.sketchGroup) this.sketchGroup.remove(seg);
       seg.geometry.dispose();
     }
-
     this.renderPrimitive(primitive);
     this.clearPolylineState();
   }
@@ -538,77 +783,17 @@ export class SketchPluginLogic {
     this.hideDimension();
   }
 
+  // ── Render primitive ──
+
   private renderPrimitive(primitive: SketchPrimitive): void {
-    if (!this.sketchGroup) return;
-
-    const material = new THREE.LineBasicMaterial({ color: 0x00aaff, linewidth: 2 });
-
-    if (primitive.type === "line") {
-      const points = this.sketchToWorld(primitive.start, primitive.end);
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
-    } else if (primitive.type === "rectangle") {
-      const { origin, width, height } = primitive;
-      const corners: [number, number][] = [
-        origin,
-        [origin[0] + width, origin[1]],
-        [origin[0] + width, origin[1] + height],
-        [origin[0], origin[1] + height],
-        origin,
-      ];
-      const worldPoints = corners.map((c) => this.sketchPointToWorld(c));
-      const geometry = new THREE.BufferGeometry().setFromPoints(worldPoints);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
-    } else if (primitive.type === "circle") {
-      const segments = 64;
-      const points: THREE.Vector3[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const angle = (i / segments) * Math.PI * 2;
-        const cp: [number, number] = [
-          primitive.center[0] + Math.cos(angle) * primitive.radius,
-          primitive.center[1] + Math.sin(angle) * primitive.radius,
-        ];
-        points.push(this.sketchPointToWorld(cp));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
-    } else if (primitive.type === "arc") {
-      const segments = 64;
-      const points: THREE.Vector3[] = [];
-      let { startAngle, endAngle } = primitive;
-      if (endAngle < startAngle) endAngle += Math.PI * 2;
-      for (let i = 0; i <= segments; i++) {
-        const angle = startAngle + (i / segments) * (endAngle - startAngle);
-        const ap: [number, number] = [
-          primitive.center[0] + Math.cos(angle) * primitive.radius,
-          primitive.center[1] + Math.sin(angle) * primitive.radius,
-        ];
-        points.push(this.sketchPointToWorld(ap));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
-    } else if (primitive.type === "ellipse") {
-      const segments = 64;
-      const points: THREE.Vector3[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const angle = (i / segments) * Math.PI * 2;
-        const ep: [number, number] = [
-          primitive.center[0] + Math.cos(angle) * primitive.radiusX,
-          primitive.center[1] + Math.sin(angle) * primitive.radiusY,
-        ];
-        points.push(this.sketchPointToWorld(ep));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
-    } else if (primitive.type === "polyline") {
-      const points = primitive.points.map((p) => this.sketchPointToWorld(p));
-      if (primitive.closed && points.length > 0) {
-        points.push(this.sketchPointToWorld(primitive.points[0]));
-      }
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      this.sketchGroup.add(new THREE.Line(geometry, material));
+    const line = this.buildPrimitiveLine(primitive, COLORS.primitive);
+    if (line && this.sketchGroup) {
+      this.sketchGroup.add(line);
+      this.primitiveLines.push(line);
     }
   }
+
+  // ── Coordinate helpers ──
 
   private showDimension(event: MouseEvent, text: string): void {
     if (!this.dimensionDiv) return;
@@ -626,21 +811,17 @@ export class SketchPluginLogic {
     if (!this.currentSketch) return new THREE.Vector3();
     const offset = this.currentSketch.planeOffset;
     switch (this.currentSketch.plane) {
-      case "XY":
-        return new THREE.Vector3(point[0], point[1], offset);
-      case "XZ":
-        return new THREE.Vector3(point[0], offset, point[1]);
-      case "YZ":
-        return new THREE.Vector3(offset, point[0], point[1]);
+      case "XY": return new THREE.Vector3(point[0], point[1], offset);
+      case "XZ": return new THREE.Vector3(point[0], offset, point[1]);
+      case "YZ": return new THREE.Vector3(offset, point[0], point[1]);
     }
   }
 
-  private sketchToWorld(
-    start: [number, number],
-    end: [number, number]
-  ): THREE.Vector3[] {
+  private sketchToWorld(start: [number, number], end: [number, number]): THREE.Vector3[] {
     return [this.sketchPointToWorld(start), this.sketchPointToWorld(end)];
   }
+
+  // ── Finish / Cancel ──
 
   private finishSketch(sketchId: string): void {
     if (!this.api || !this.currentSketch) return;
@@ -648,11 +829,9 @@ export class SketchPluginLogic {
     const sketch = this.api.getSketch(sketchId);
     if (!sketch) return;
 
-    // Detect profiles
     const profiles = detectProfiles(sketch.primitives);
     this.api.setProfiles(sketchId, profiles);
 
-    // Record operation
     useHistoryStore.getState().addOperation({
       id: uuidv4(),
       type: "sketch",
@@ -662,13 +841,14 @@ export class SketchPluginLogic {
       timestamp: Date.now(),
     });
 
+    this.sketchFinished = true;
     this.removeCanvasListeners();
+    setSelectedPrimitive(null);
     useEditorStore.getState().setMode("idle");
   }
 
   private cancelSketch(): void {
     if (this.currentSketch && this.api) {
-      // Remove sketch from store and API
       const sketchId = this.currentSketch.id;
       useProjectStore.getState().removeSketch(sketchId);
     }
@@ -678,11 +858,12 @@ export class SketchPluginLogic {
     this.removeCanvasListeners();
     this.currentSketch = null;
     this.sketchGroup = null;
+    this.primitiveLines = [];
     useEditorStore.getState().setMode("idle");
     useEditorStore.getState().setSketchPlane(null);
   }
 
-  // AI tools
+  // ── AI tools ──
   getAITools() {
     return {
       start: async (params: Record<string, unknown>) => {
@@ -692,72 +873,63 @@ export class SketchPluginLogic {
       },
       add_line: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "line",
-          start: [params.x1 as number, params.y1 as number],
+        const prim: SketchPrimitive = {
+          type: "line", start: [params.x1 as number, params.y1 as number],
           end: [params.x2 as number, params.y2 as number],
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       add_rectangle: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "rectangle",
-          origin: [params.x as number, params.y as number],
-          width: params.width as number,
-          height: params.height as number,
+        const prim: SketchPrimitive = {
+          type: "rectangle", origin: [params.x as number, params.y as number],
+          width: params.width as number, height: params.height as number,
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       add_circle: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "circle",
-          center: [params.cx as number, params.cy as number],
+        const prim: SketchPrimitive = {
+          type: "circle", center: [params.cx as number, params.cy as number],
           radius: params.radius as number,
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       add_arc: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "arc",
-          center: [params.cx as number, params.cy as number],
+        const prim: SketchPrimitive = {
+          type: "arc", center: [params.cx as number, params.cy as number],
           radius: params.radius as number,
-          startAngle: params.startAngle as number,
-          endAngle: params.endAngle as number,
+          startAngle: params.startAngle as number, endAngle: params.endAngle as number,
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       add_ellipse: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "ellipse",
-          center: [params.cx as number, params.cy as number],
-          radiusX: params.radiusX as number,
-          radiusY: params.radiusY as number,
+        const prim: SketchPrimitive = {
+          type: "ellipse", center: [params.cx as number, params.cy as number],
+          radiusX: params.radiusX as number, radiusY: params.radiusY as number,
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       add_polyline: async (params: Record<string, unknown>) => {
         if (!this.currentSketch || !this.api) return { success: false };
-        const primitive: SketchPrimitive = {
-          type: "polyline",
-          points: params.points as [number, number][],
+        const prim: SketchPrimitive = {
+          type: "polyline", points: params.points as [number, number][],
           closed: (params.closed as boolean) ?? false,
         };
-        this.api.addPrimitive(this.currentSketch.id, primitive);
-        this.renderPrimitive(primitive);
+        this.api.addPrimitive(this.currentSketch.id, prim);
+        this.renderPrimitive(prim);
         return { success: true };
       },
       finish: async () => {

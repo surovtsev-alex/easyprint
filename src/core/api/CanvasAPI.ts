@@ -7,6 +7,7 @@ export class CanvasAPI {
   private camera: THREE.PerspectiveCamera | null = null;
   private bodies: Map<string, Body> = new Map();
   private sketches: Map<string, Sketch> = new Map();
+  private sketchVisuals: Map<string, THREE.Group> = new Map();
 
   setScene(scene: THREE.Scene): void {
     this.scene = scene;
@@ -104,6 +105,38 @@ export class CanvasAPI {
     const sketch = this.sketches.get(sketchId);
     if (sketch) {
       sketch.profiles = profiles;
+    }
+  }
+
+  updatePrimitive(sketchId: string, index: number, primitive: SketchPrimitive): void {
+    const sketch = this.sketches.get(sketchId);
+    if (sketch && index >= 0 && index < sketch.primitives.length) {
+      sketch.primitives[index] = primitive;
+    }
+  }
+
+  removePrimitive(sketchId: string, index: number): void {
+    const sketch = this.sketches.get(sketchId);
+    if (sketch && index >= 0 && index < sketch.primitives.length) {
+      sketch.primitives.splice(index, 1);
+    }
+  }
+
+  // ── Sketch Visuals (persistent) ──
+
+  storeSketchVisual(sketchId: string, group: THREE.Group): void {
+    this.sketchVisuals.set(sketchId, group);
+  }
+
+  getSketchVisual(sketchId: string): THREE.Group | undefined {
+    return this.sketchVisuals.get(sketchId);
+  }
+
+  removeSketchVisual(sketchId: string): void {
+    const group = this.sketchVisuals.get(sketchId);
+    if (group) {
+      this.scene?.remove(group);
+      this.sketchVisuals.delete(sketchId);
     }
   }
 

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Body, Sketch, Operation } from "../api/types";
+import type { Body, Sketch, SketchPrimitive, Operation } from "../api/types";
 
 interface ProjectState {
   projectName: string;
@@ -13,6 +13,8 @@ interface ProjectState {
   addOperation: (bodyId: string, operation: Operation) => void;
   addSketch: (sketch: Sketch) => void;
   removeSketch: (sketchId: string) => void;
+  updateSketchPrimitive: (sketchId: string, index: number, primitive: SketchPrimitive) => void;
+  removeSketchPrimitive: (sketchId: string, index: number) => void;
   toggleBodyVisibility: (bodyId: string) => void;
   reset: () => void;
 }
@@ -54,6 +56,24 @@ export const useProjectStore = create<ProjectState>((set) => ({
   removeSketch: (sketchId) =>
     set((state) => ({
       sketches: state.sketches.filter((s) => s.id !== sketchId),
+    })),
+
+  updateSketchPrimitive: (sketchId, index, primitive) =>
+    set((state) => ({
+      sketches: state.sketches.map((s) =>
+        s.id === sketchId
+          ? { ...s, primitives: s.primitives.map((p, i) => (i === index ? primitive : p)) }
+          : s
+      ),
+    })),
+
+  removeSketchPrimitive: (sketchId, index) =>
+    set((state) => ({
+      sketches: state.sketches.map((s) =>
+        s.id === sketchId
+          ? { ...s, primitives: s.primitives.filter((_, i) => i !== index) }
+          : s
+      ),
     })),
 
   toggleBodyVisibility: (bodyId) =>

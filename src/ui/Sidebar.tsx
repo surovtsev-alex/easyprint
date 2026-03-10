@@ -3,6 +3,8 @@
 import { useProjectStore } from "@/core/store/projectStore";
 import { useEditorStore } from "@/core/store/editorStore";
 import { canvasAPI } from "@/core/api/CanvasAPI";
+import { pluginRegistry } from "@/plugins/registry";
+import { eventBus } from "@/core/api/EventBus";
 
 function EyeIcon({ visible }: { visible: boolean }) {
   return (
@@ -104,6 +106,17 @@ export function Sidebar() {
             <div
               key={sketch.id}
               className="flex items-center gap-2 px-1 py-1 rounded text-gray-300 hover:bg-gray-700/50 cursor-pointer text-xs"
+              onDoubleClick={() => {
+                // Activate sketch plugin and enter edit mode
+                pluginRegistry.deactivateAll();
+                pluginRegistry.activate("sketch");
+                useEditorStore.getState().setActivePlugin("sketch");
+                // Small delay to let plugin activate before sending edit event
+                setTimeout(() => {
+                  eventBus.emit("sketch:edit", { sketchId: sketch.id });
+                }, 50);
+              }}
+              title="Double-click to edit"
             >
               <svg
                 width="12"
