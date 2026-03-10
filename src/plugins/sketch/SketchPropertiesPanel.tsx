@@ -146,8 +146,43 @@ export function SketchPropertiesPanel() {
               update({ ...prim, center: [prim.center[0], v] })} />
             <NumInput label="R" value={prim.radius} onChange={(v) =>
               update({ ...prim, radius: Math.max(0.1, v) })} />
+            <NumInput label="S°" value={+(prim.startAngle * 180 / Math.PI).toFixed(1)} onChange={(v) =>
+              update({ ...prim, startAngle: v * Math.PI / 180 })} />
+            <NumInput label="E°" value={+(prim.endAngle * 180 / Math.PI).toFixed(1)} onChange={(v) =>
+              update({ ...prim, endAngle: v * Math.PI / 180 })} />
           </>
         )}
+        {prim.type === "polyline" && (
+          <>
+            <div className="text-[10px] text-gray-400 mb-1">{prim.points.length} points</div>
+            {prim.points.map((pt, i) => (
+              <div key={i} className="flex gap-1">
+                <NumInput label={`X${i}`} value={pt[0]} onChange={(v) => {
+                  const pts = prim.points.map(p => [...p] as [number, number]);
+                  pts[i][0] = v;
+                  update({ ...prim, points: pts });
+                }} />
+                <NumInput label={`Y${i}`} value={pt[1]} onChange={(v) => {
+                  const pts = prim.points.map(p => [...p] as [number, number]);
+                  pts[i][1] = v;
+                  update({ ...prim, points: pts });
+                }} />
+              </div>
+            ))}
+            <label className="flex items-center gap-1.5 text-[10px] text-gray-300 mt-1">
+              <input
+                type="checkbox"
+                checked={prim.closed}
+                onChange={(e) => update({ ...prim, closed: e.target.checked })}
+                className="rounded"
+              />
+              Closed
+            </label>
+          </>
+        )}
+      </div>
+      <div className="text-[9px] text-gray-500 mt-2 border-t border-gray-700 pt-1.5">
+        Select tool (S) — click to select, drag to move
       </div>
     </div>
   );

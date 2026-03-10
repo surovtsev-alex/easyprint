@@ -63,6 +63,12 @@ export class SketchPluginLogic {
   private boundMouseUp: ((e: MouseEvent) => void) | null = null;
   private canvasElement: HTMLCanvasElement | null = null;
   private sketchFinished = false;
+  private dragState: {
+    isDragging: boolean;
+    primitiveIndex: number | null;
+    startSketchPoint: [number, number] | null;
+    originalPrimitive: SketchPrimitive | null;
+  } = { isDragging: false, primitiveIndex: null, startSketchPoint: null, originalPrimitive: null };
 
   activate(api: CanvasAPI, bus: EventBus): void {
     this.api = api;
@@ -239,6 +245,7 @@ export class SketchPluginLogic {
         this.canvasElement.removeEventListener("mouseup", this.boundMouseUp);
       if (this.boundDblClick)
         this.canvasElement.removeEventListener("dblclick", this.boundDblClick);
+      this.canvasElement.style.cursor = "default";
     }
     if (this.dimensionDiv) {
       this.dimensionDiv.remove();
@@ -280,9 +287,9 @@ export class SketchPluginLogic {
     return [intersection.y, intersection.z];
   }
 
-  // ── Selection ──
+  // ── Selection & Drag ──
 
-  private handleSelect(event: MouseEvent): void {
+  private handleSelectDown(event: MouseEvent): void {
     const point = this.getPlanePoint(event);
     if (!point || !this.currentSketch) return;
 
@@ -304,6 +311,85 @@ export class SketchPluginLogic {
       if (line?.material instanceof THREE.LineBasicMaterial) {
         line.material.color.setHex(COLORS.selected);
       }
+    }
+
+    // Start drag if we clicked on a primitive
+    if (bestIdx !== null) {
+      this.dragState = {
+        isDragging: true,
+        primitiveIndex: bestIdx,
+        startSketchPoint: point,
+        originalPrimitive: JSON.parse(JSON.stringify(this.currentSketch.primitives[bestIdx])),
+      };
+    }
+  }
+
+  private handleSelectMove(event: MouseEvent): void {
+    if (this.dragState.isDragging && this.dragState.primitiveIndex !== null) {
+      const point = this.getPlanePoint(event);
+      if (!point || !this.currentSketch || !this.dragState.startSketchPoint || !this.dragState.originalPrimitive) return;
+
+      const dx = point[0] - this.dragState.startSketchPoint[0];
+      const dy = point[1] - this.dragState.startSketchPoint[1];
+
+      const moved = this.movePrimitive(this.dragState.originalPrimitive, dx, dy);
+      if (moved) {
+        this.updatePrimitive(this.dragState.primitiveIndex, moved);
+        this.showDimension(event, `Δ ${dx.toFixed(1)}, ${dy.toFixed(1)}`);
+      }
+      return;
+    }
+
+    // Hover cursor feedback
+    const point = this.getPlanePoint(event);
+    if (point && this.canvasElement) {
+      const nearIdx = this.findNearestPrimitive(point, 5);
+      this.canvasElement.style.cursor = nearIdx !== null ? "move" : "default";
+    }
+  }
+
+  private handleSelectUp(): void {
+    if (this.dragState.isDragging) {
+      this.hideDimension();
+    }
+    this.dragState = { isDragging: false, primitiveIndex: null, startSketchPoint: null, originalPrimitive: null };
+  }
+
+  private movePrimitive(prim: SketchPrimitive, dx: number, dy: number): SketchPrimitive | null {
+    switch (prim.type) {
+      case "line":
+        return {
+          ...prim,
+          start: [prim.start[0] + dx, prim.start[1] + dy],
+          end: [prim.end[0] + dx, prim.end[1] + dy],
+        };
+      case "rectangle":
+        return {
+          ...prim,
+          origin: [prim.origin[0] + dx, prim.origin[1] + dy],
+        };
+      case "circle":
+        return {
+          ...prim,
+          center: [prim.center[0] + dx, prim.center[1] + dy],
+        };
+      case "ellipse":
+        return {
+          ...prim,
+          center: [prim.center[0] + dx, prim.center[1] + dy],
+        };
+      case "arc":
+        return {
+          ...prim,
+          center: [prim.center[0] + dx, prim.center[1] + dy],
+        };
+      case "polyline":
+        return {
+          ...prim,
+          points: prim.points.map(([x, y]) => [x + dx, y + dy] as [number, number]),
+        };
+      default:
+        return null;
     }
   }
 
@@ -429,7 +515,7 @@ export class SketchPluginLogic {
     const tool = getSketchTool();
 
     if (tool === "select") {
-      this.handleSelect(event);
+      this.handleSelectDown(event);
       return;
     }
 
@@ -484,7 +570,10 @@ export class SketchPluginLogic {
 
   private handleMouseMove(event: MouseEvent): void {
     const tool = getSketchTool();
-    if (tool === "select") return;
+    if (tool === "select") {
+      this.handleSelectMove(event);
+      return;
+    }
 
     const point = this.getPlanePoint(event);
     if (!point || !this.sketchGroup) return;
@@ -575,7 +664,11 @@ export class SketchPluginLogic {
     if (event.button !== 0) return;
     const tool = getSketchTool();
 
-    if (tool === "arc" || tool === "polyline" || tool === "select") return;
+    if (tool === "select") {
+      this.handleSelectUp();
+      return;
+    }
+    if (tool === "arc" || tool === "polyline") return;
     if (!this.drawingState.isDrawing) return;
 
     const point = this.getPlanePoint(event);

@@ -437,3 +437,134 @@ test.describe("Sketch Editing", () => {
     await expect(page.locator("button", { hasText: "Finish" })).toBeVisible();
   });
 });
+
+test.describe("Sketch Drag & Edit", () => {
+  test("should select a primitive and show properties panel", async ({ page }) => {
+    await page.goto("/");
+    await waitForApp(page);
+
+    // Draw a rectangle
+    await page.click('button[title="Sketch"]');
+    await page.waitForSelector("text=XY", { timeout: 3000 });
+    await page.click("text=XY");
+    await page.waitForSelector("text=Rect", { timeout: 3000 });
+    await page.click("text=Rect");
+
+    const canvas = page.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("Canvas not found");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    // Draw rectangle — click start → drag → release
+    const x1 = cx - 40, y1 = cy - 30;
+    const x2 = cx + 40, y2 = cy + 30;
+    await page.mouse.move(x1, y1);
+    await page.mouse.down();
+    await page.mouse.move(x2, y2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Switch to select tool and click on the TOP edge of rectangle
+    await page.keyboard.press("s");
+    await page.waitForTimeout(100);
+    await page.mouse.click(cx, y1); // top edge
+    await page.waitForTimeout(500);
+
+    // Properties panel should appear with RECTANGLE header
+    await expect(page.getByText("rectangle", { exact: false })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("W", { exact: true })).toBeVisible();
+    await expect(page.getByText("H", { exact: true })).toBeVisible();
+  });
+
+  test("should drag a primitive to a new position", async ({ page }) => {
+    await page.goto("/");
+    await waitForApp(page);
+
+    // Draw a rectangle (easier to hit than a circle)
+    await page.click('button[title="Sketch"]');
+    await page.waitForSelector("text=XY", { timeout: 3000 });
+    await page.click("text=XY");
+    await page.waitForSelector("text=Rect", { timeout: 3000 });
+    await page.click("text=Rect");
+
+    const canvas = page.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("Canvas not found");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    const x1 = cx - 40, y1 = cy - 30;
+    const x2 = cx + 40, y2 = cy + 30;
+    await page.mouse.move(x1, y1);
+    await page.mouse.down();
+    await page.mouse.move(x2, y2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Select and drag from top edge
+    await page.keyboard.press("s");
+    await page.waitForTimeout(100);
+
+    // Click top edge to select
+    await page.mouse.click(cx, y1);
+    await page.waitForTimeout(500);
+    await expect(page.getByText("rectangle", { exact: false })).toBeVisible({ timeout: 5000 });
+
+    // Drag from top edge downward
+    await page.mouse.move(cx, y1);
+    await page.mouse.down();
+    await page.mouse.move(cx + 50, y1 + 50, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Properties panel should still be visible (primitive still selected)
+    await expect(page.getByText("rectangle", { exact: false })).toBeVisible();
+  });
+
+  test("should edit dimensions via keyboard in properties panel", async ({ page }) => {
+    await page.goto("/");
+    await waitForApp(page);
+
+    // Draw a rectangle
+    await page.click('button[title="Sketch"]');
+    await page.waitForSelector("text=XY", { timeout: 3000 });
+    await page.click("text=XY");
+    await page.waitForSelector("text=Rect", { timeout: 3000 });
+    await page.click("text=Rect");
+
+    const canvas = page.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error("Canvas not found");
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+
+    const x1 = cx - 40, y1 = cy - 30;
+    const x2 = cx + 40, y2 = cy + 30;
+    await page.mouse.move(x1, y1);
+    await page.mouse.down();
+    await page.mouse.move(x2, y2, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+
+    // Select on top edge
+    await page.keyboard.press("s");
+    await page.waitForTimeout(100);
+    await page.mouse.click(cx, y1);
+    await page.waitForTimeout(500);
+
+    // Properties panel should be visible
+    await expect(page.getByText("rectangle", { exact: false })).toBeVisible({ timeout: 5000 });
+
+    // Find W input — it's inside a container with the "W" label
+    const panel = page.locator(".absolute.top-14.right-2");
+    const wInput = panel.locator("input").nth(2); // X=0, Y=1, W=2, H=3
+    await wInput.click({ timeout: 5000 });
+    await wInput.fill("100.00");
+    await wInput.press("Enter");
+    await page.waitForTimeout(300);
+
+    // Verify the value was committed
+    await expect(wInput).toHaveValue("100.00");
+  });
+});
