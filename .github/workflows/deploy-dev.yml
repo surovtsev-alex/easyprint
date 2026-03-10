@@ -1,0 +1,95 @@
+name: Deploy Dev to GitHub Pages
+
+on:
+  push:
+    branches:
+      - "claude/**"
+      - "dev"
+      - "develop"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-dev"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (dev)
+        env:
+          REPO_NAME: ${{ github.event.repository.name }}
+          NEXT_PUBLIC_ENV: development
+        run: npm run build
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: gh-pages-branch
+        continue-on-error: true
+
+      - name: Prepare gh-pages branch
+        run: |
+          if [ ! -d "gh-pages-branch/.git" ]; then
+            mkdir -p gh-pages-branch
+            cd gh-pages-branch
+            git init
+            git checkout -b gh-pages
+          fi
+
+      - name: Copy dev build to /dev subfolder
+        run: |
+          rm -rf gh-pages-branch/dev
+          cp -r out gh-pages-branch/dev
+          touch gh-pages-branch/.nojekyll
+          # Create root index.html that redirects to prod or shows links
+          cat > gh-pages-branch/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>EasyPrint</title>
+          <style>
+            body { font-family: system-ui; background: #0a0a1a; color: #eee; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+            .container { text-align: center; }
+            a { color: #60a5fa; text-decoration: none; display: inline-block; margin: 12px; padding: 12px 24px; border: 1px solid #333; border-radius: 8px; transition: all 0.2s; }
+            a:hover { background: #1e3a5f; border-color: #60a5fa; }
+            h1 { margin-bottom: 8px; }
+            p { color: #888; margin-bottom: 24px; }
+          </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>EasyPrint 3D</h1>
+              <p>Web-based 3D modeling application</p>
+              <a href="./dev/">Dev Version</a>
+            </div>
+          </body>
+          </html>
+          HTMLEOF
+
+      - name: Deploy to gh-pages branch
+        run: |
+          cd gh-pages-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to deploy" && exit 0
+          git commit -m "Deploy dev: ${{ github.sha }}"
+          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages --force
