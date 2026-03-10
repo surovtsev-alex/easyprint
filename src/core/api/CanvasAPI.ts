@@ -10,7 +10,22 @@ export class CanvasAPI {
   private sketchVisuals: Map<string, THREE.Group> = new Map();
 
   setScene(scene: THREE.Scene): void {
+    const oldScene = this.scene;
     this.scene = scene;
+
+    // Migrate all existing objects to the new scene
+    if (oldScene && oldScene !== scene) {
+      // Migrate body meshes
+      for (const body of this.bodies.values()) {
+        oldScene.remove(body.mesh);
+        scene.add(body.mesh);
+      }
+      // Migrate sketch visuals
+      for (const group of this.sketchVisuals.values()) {
+        oldScene.remove(group);
+        scene.add(group);
+      }
+    }
   }
 
   setCamera(camera: THREE.PerspectiveCamera): void {

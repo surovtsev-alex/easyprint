@@ -2,7 +2,7 @@
 
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, PerspectiveCamera, OrthographicCamera } from "@react-three/drei";
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useMemo } from "react";
 import * as THREE from "three";
 import { MillimeterGrid } from "./Grid";
 import { AxisIndicator, ViewCubeOverlay } from "./ViewCube";
@@ -44,8 +44,10 @@ function SceneContent() {
 
 function QuadSceneContent({
   view,
+  isPrimary,
 }: {
   view: "perspective" | "top" | "front" | "right";
+  isPrimary: boolean;
 }) {
   const camPositions: Record<string, [number, number, number]> = {
     perspective: [60, 60, 60],
@@ -74,6 +76,10 @@ function QuadSceneContent({
           fov={50}
           near={0.1}
           far={10000}
+          onUpdate={(cam) => {
+            // Only primary viewport controls canvasAPI camera
+            if (isPrimary) canvasAPI.setCamera(cam);
+          }}
         />
       )}
       <OrbitControls
@@ -81,10 +87,15 @@ function QuadSceneContent({
         dampingFactor={0.1}
         enableRotate={!isOrtho}
       />
-      <ambientLight intensity={0.4} />
-      <directionalLight position={[50, 100, 50]} intensity={0.8} />
-      <MillimeterGrid />
-      <AxisIndicator />
+      {/* Lights and grid only in first viewport - scene is shared */}
+      {isPrimary && (
+        <>
+          <ambientLight intensity={0.4} />
+          <directionalLight position={[50, 100, 50]} intensity={0.8} />
+          <MillimeterGrid />
+          <AxisIndicator />
+        </>
+      )}
     </>
   );
 }
@@ -93,6 +104,13 @@ export function ViewportManager() {
   const viewportMode = useEditorStore((s) => s.viewportMode);
   const showPlaneSelector = useEditorStore((s) => s.showPlaneSelector);
   const setShowPlaneSelector = useEditorStore((s) => s.setShowPlaneSelector);
+
+  // Shared scene - persists across view switches
+  const sharedScene = useMemo(() => {
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+    return scene;
+  }, []);
 
   const handleViewChange = useCallback((position: THREE.Vector3) => {
     canvasAPI.setCameraPosition(position, new THREE.Vector3(0, 0, 0));
@@ -112,13 +130,15 @@ export function ViewportManager() {
     setShowPlaneSelector(false);
   }, [setShowPlaneSelector]);
 
+  const onCanvasCreated = useCallback(({ scene }: { scene: THREE.Scene }) => {
+    canvasAPI.setScene(scene);
+  }, []);
+
   const canvasProps = {
     className: "w-full h-full" as string,
+    scene: sharedScene,
     gl: { antialias: true, alpha: false },
-    onCreated: ({ scene }: { scene: THREE.Scene }) => {
-      scene.background = new THREE.Color(0x1a1a2e);
-      canvasAPI.setScene(scene);
-    },
+    onCreated: onCanvasCreated,
   };
 
   if (viewportMode === "quad") {
@@ -134,7 +154,7 @@ export function ViewportManager() {
                 {labels[i]}
               </div>
               <Canvas {...canvasProps}>
-                <QuadSceneContent view={view} />
+                <QuadSceneContent view={view} isPrimary={i === 0} />
               </Canvas>
             </div>
           ))}
