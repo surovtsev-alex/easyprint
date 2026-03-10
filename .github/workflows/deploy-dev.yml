@@ -10,8 +10,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: "pages-dev"
@@ -53,6 +51,7 @@ jobs:
             cd gh-pages-branch
             git init
             git checkout -b gh-pages
+            touch .nojekyll
           fi
 
       - name: Copy dev build to /dev subfolder
@@ -60,8 +59,10 @@ jobs:
           rm -rf gh-pages-branch/dev
           cp -r out gh-pages-branch/dev
           touch gh-pages-branch/.nojekyll
-          # Create root index.html that redirects to prod or shows links
-          cat > gh-pages-branch/index.html << 'HTMLEOF'
+
+          # Create landing page if no prod build exists yet
+          if [ ! -f "gh-pages-branch/index.html" ] || grep -q "EasyPrint Environments" gh-pages-branch/index.html 2>/dev/null; then
+            cat > gh-pages-branch/index.html << 'HTMLEOF'
           <!DOCTYPE html>
           <html>
           <head><meta charset="utf-8"><title>EasyPrint</title>
@@ -72,17 +73,22 @@ jobs:
             a:hover { background: #1e3a5f; border-color: #60a5fa; }
             h1 { margin-bottom: 8px; }
             p { color: #888; margin-bottom: 24px; }
+            .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
+            .dev { background: #854d0e; color: #fef08a; }
+            .prod { background: #166534; color: #bbf7d0; }
           </style>
           </head>
           <body>
+            <!-- EasyPrint Environments -->
             <div class="container">
               <h1>EasyPrint 3D</h1>
               <p>Web-based 3D modeling application</p>
-              <a href="./dev/">Dev Version</a>
+              <a href="./dev/">Dev Version <span class="badge dev">DEV</span></a>
             </div>
           </body>
           </html>
           HTMLEOF
+          fi
 
       - name: Deploy to gh-pages branch
         run: |
