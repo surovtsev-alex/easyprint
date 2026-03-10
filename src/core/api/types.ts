@@ -43,7 +43,9 @@ export type SketchPrimitive =
   | SketchLine
   | SketchCircle
   | SketchRectangle
-  | SketchArc;
+  | SketchArc
+  | SketchEllipse
+  | SketchPolyline;
 
 export interface SketchLine {
   type: "line";
@@ -70,6 +72,19 @@ export interface SketchArc {
   radius: number;
   startAngle: number;
   endAngle: number;
+}
+
+export interface SketchEllipse {
+  type: "ellipse";
+  center: [number, number];
+  radiusX: number;
+  radiusY: number;
+}
+
+export interface SketchPolyline {
+  type: "polyline";
+  points: [number, number][];
+  closed: boolean;
 }
 
 export interface Sketch {

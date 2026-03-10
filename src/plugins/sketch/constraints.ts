@@ -1,4 +1,4 @@
-import type { SketchPrimitive, SketchLine, SketchProfile } from "@/core/api/types";
+import type { SketchPrimitive, SketchLine, SketchProfile, SketchArc, SketchEllipse, SketchPolyline } from "@/core/api/types";
 
 const SNAP_THRESHOLD = 2; // mm
 
@@ -32,6 +32,35 @@ export function snapPoint(
       }
     } else if (prim.type === "circle") {
       if (dist(point, prim.center) < threshold) return [...prim.center];
+    } else if (prim.type === "arc") {
+      if (dist(point, prim.center) < threshold) return [...prim.center];
+      // Snap to arc endpoints
+      const startPt: [number, number] = [
+        prim.center[0] + Math.cos(prim.startAngle) * prim.radius,
+        prim.center[1] + Math.sin(prim.startAngle) * prim.radius,
+      ];
+      const endPt: [number, number] = [
+        prim.center[0] + Math.cos(prim.endAngle) * prim.radius,
+        prim.center[1] + Math.sin(prim.endAngle) * prim.radius,
+      ];
+      if (dist(point, startPt) < threshold) return startPt;
+      if (dist(point, endPt) < threshold) return endPt;
+    } else if (prim.type === "ellipse") {
+      if (dist(point, prim.center) < threshold) return [...prim.center];
+      // Snap to quadrant points
+      const quadrants: [number, number][] = [
+        [prim.center[0] + prim.radiusX, prim.center[1]],
+        [prim.center[0] - prim.radiusX, prim.center[1]],
+        [prim.center[0], prim.center[1] + prim.radiusY],
+        [prim.center[0], prim.center[1] - prim.radiusY],
+      ];
+      for (const q of quadrants) {
+        if (dist(point, q) < threshold) return q;
+      }
+    } else if (prim.type === "polyline") {
+      for (const pt of prim.points) {
+        if (dist(point, pt) < threshold) return [...pt];
+      }
     }
   }
   return point;
@@ -59,9 +88,14 @@ export function detectProfiles(primitives: SketchPrimitive[]): SketchProfile[] {
   // For lines, we check if they form a closed loop
   const profiles: SketchProfile[] = [];
 
-  // Check for rectangles and circles - they are automatically closed profiles
+  // Check for closed shapes - they are automatically closed profiles
   primitives.forEach((prim, idx) => {
-    if (prim.type === "rectangle" || prim.type === "circle") {
+    if (
+      prim.type === "rectangle" ||
+      prim.type === "circle" ||
+      prim.type === "ellipse" ||
+      (prim.type === "polyline" && prim.closed)
+    ) {
       profiles.push({
         id: `profile_${idx}`,
         edges: [idx],

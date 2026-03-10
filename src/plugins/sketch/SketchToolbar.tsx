@@ -3,7 +3,7 @@
 import { useEditorStore } from "@/core/store/editorStore";
 import { eventBus } from "@/core/api/EventBus";
 
-export type SketchTool = "line" | "circle" | "rectangle" | "select";
+export type SketchTool = "line" | "rectangle" | "circle" | "arc" | "ellipse" | "polyline" | "select";
 
 let currentSketchTool: SketchTool = "line";
 const listeners: Set<() => void> = new Set();
@@ -33,13 +33,31 @@ export function SketchToolbar() {
   const mode = useEditorStore((s) => s.mode);
   const tool = useSketchTool();
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      const map: Record<string, SketchTool> = {
+        l: "line", r: "rectangle", c: "circle",
+        a: "arc", e: "ellipse", p: "polyline", s: "select",
+      };
+      const t = map[e.key.toLowerCase()];
+      if (t) setSketchTool(t);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
+
   if (mode !== "sketch") return null;
 
-  const tools = [
-    { id: "line" as const, label: "Line", icon: "╱" },
-    { id: "rectangle" as const, label: "Rect", icon: "▭" },
-    { id: "circle" as const, label: "Circle", icon: "○" },
-    { id: "select" as const, label: "Select", icon: "↖" },
+  const tools: { id: SketchTool; label: string; icon: string; tip?: string }[] = [
+    { id: "line", label: "Line", icon: "╱", tip: "Draw a line (L)" },
+    { id: "rectangle", label: "Rect", icon: "▭", tip: "Draw a rectangle (R)" },
+    { id: "circle", label: "Circle", icon: "○", tip: "Draw a circle (C)" },
+    { id: "arc", label: "Arc", icon: "⌒", tip: "Draw a 3-point arc (A)" },
+    { id: "ellipse", label: "Ellipse", icon: "⬮", tip: "Draw an ellipse (E)" },
+    { id: "polyline", label: "Polyline", icon: "⏌", tip: "Draw connected lines, dbl-click to finish (P)" },
+    { id: "select", label: "Select", icon: "↖", tip: "Select primitives (S)" },
   ];
 
   const handleFinish = () => {
@@ -64,7 +82,7 @@ export function SketchToolbar() {
               ? "bg-blue-600 text-white"
               : "text-gray-300 hover:bg-gray-700"
           }`}
-          title={t.label}
+          title={t.tip || t.label}
         >
           <span className="mr-1">{t.icon}</span>
           {t.label}
